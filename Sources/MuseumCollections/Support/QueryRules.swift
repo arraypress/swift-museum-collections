@@ -17,7 +17,7 @@ enum QueryRules {
     static let metWidth = 8
 
     /// A query's text and numbers, checked before anything is sent.
-    static func validate(_ query: ArtworkQuery) throws {
+    static func validate(_ query: ArtworkQuery) throws(MuseumError) {
         guard !query.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw MuseumError.invalidQuery("The search text is empty")
         }
@@ -29,7 +29,7 @@ enum QueryRules {
     }
 
     /// Chicago's depth: `offset + limit` within 10,000.
-    static func validateChicago(_ query: ArtworkQuery) throws {
+    static func validateChicago(_ query: ArtworkQuery) throws(MuseumError) {
         guard query.offset + query.limit <= aicDepthLimit else {
             throw MuseumError.invalidQuery("The Art Institute pages no further than result 10,000")
         }

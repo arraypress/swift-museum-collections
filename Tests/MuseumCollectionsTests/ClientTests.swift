@@ -14,28 +14,32 @@ import XCTest
 
 final class ClientTests: XCTestCase {
 
-    /// Canned answers by URL substring; anything else is a 404.
-    final class Canned: @unchecked Sendable {
-        let lock = NSLock()
-        var routes: [(String, Int, String, String)] = []
-        var seen: [URLRequest] = []
+    /// The requests a canned transport saw.
+    actor Recorder {
+        private(set) var requests: [URLRequest] = []
+        func record(_ request: URLRequest) { requests.append(request) }
+    }
 
-        func add(_ match: String, _ body: String, status: Int = 200, type: String = "application/json") {
+    /// Canned answers by URL substring; anything else is a 404.
+    struct Canned {
+        var routes: [(match: String, status: Int, body: String, type: String)] = []
+        let recorder = Recorder()
+
+        mutating func add(_ match: String, _ body: String, status: Int = 200, type: String = "application/json") {
             routes.append((match, status, body, type))
         }
 
-        func record(_ request: URLRequest) {
-            lock.lock(); seen.append(request); lock.unlock()
-        }
+        var seen: [URLRequest] { get async { await recorder.requests } }
 
         var transport: Transport {
-            { request in
-                self.record(request)
+            let routes = routes, recorder = recorder
+            return { request in
+                await recorder.record(request)
                 let url = request.url!.absoluteString
-                let route = self.routes.first { url.contains($0.0) }
-                let response = HTTPURLResponse(url: request.url!, statusCode: route?.1 ?? 404, httpVersion: nil,
-                                               headerFields: ["Content-Type": route?.3 ?? "application/json"])!
-                return (Data((route?.2 ?? "{}").utf8), response)
+                let route = routes.first { url.contains($0.match) }
+                let response = HTTPURLResponse(url: request.url!, statusCode: route?.status ?? 404, httpVersion: nil,
+                                               headerFields: ["Content-Type": route?.type ?? "application/json"])!
+                return (Data((route?.body ?? "{}").utf8), response)
             }
         }
     }
@@ -46,7 +50,7 @@ final class ClientTests: XCTestCase {
     }
 
     func testMetSearchSkipsUnknownIdsAndFiltersPublicDomainItself() async throws {
-        let canned = Canned()
+        var canned = Canned()
         canned.add("/v1.1/search", #"{"total":5,"objectIDs":[1,2,3,4,5]}"#)
         canned.add("/objects/1", metObject(1, publicDomain: true))
         canned.add("/objects/2", metObject(2, publicDomain: false))
@@ -61,7 +65,7 @@ final class ClientTests: XCTestCase {
     }
 
     func testMetSearchWithNoHitsIsEmptyNotAnError() async throws {
-        let canned = Canned()
+        var canned = Canned()
         canned.add("/v1.1/search", #"{"total":0,"objectIDs":null}"#)
         let results = try await MetMuseum(transport: canned.transport).search(ArtworkQuery("zzqq"))
         XCTAssertTrue(results.artworks.isEmpty)
@@ -69,7 +73,7 @@ final class ClientTests: XCTestCase {
     }
 
     func testCombinedSearchInterleavesAndReportsAPartialFailure() async throws {
-        let canned = Canned()
+        var canned = Canned()
         canned.add("/v1.1/search", #"{"total":2,"objectIDs":[1,2]}"#)
         canned.add("/objects/1", metObject(1, publicDomain: true))
         canned.add("/objects/2", metObject(2, publicDomain: true))
@@ -79,7 +83,7 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(both.artworks.map(\.id.description), ["met:1", "aic:10", "met:2"], "filler below the line is dropped")
         XCTAssertTrue(both.next.isEmpty)
 
-        let broken = Canned()
+        var broken = Canned()
         broken.add("/v1.1/search", "", status: 503)
         broken.add("api.artic.edu/api/v1/artworks/search", #"{"data":[{"_score":40,"id":10,"image_id":"i"}]}"#)
         let partial = try await MuseumCollections(transport: broken.transport).search(ArtworkQuery("x"))
@@ -90,20 +94,21 @@ final class ClientTests: XCTestCase {
         do {
             _ = try await MuseumCollections(transport: dead.transport).search(ArtworkQuery("x"))
             XCTFail("every museum failed")
-        } catch let error as MuseumError {
+        } catch {
             XCTAssertEqual(error, .http(.met, 404))
         }
     }
 
     func testDepartmentSearchAsksOnlyTheMet() async throws {
-        let canned = Canned()
+        var canned = Canned()
         canned.add("/v1.1/search", #"{"total":0,"objectIDs":null}"#)
         _ = try await MuseumCollections(transport: canned.transport).search(ArtworkQuery("x", metDepartment: 11))
-        XCTAssertFalse(canned.seen.contains { $0.url!.host!.contains("artic") })
+        let seen = await canned.seen
+        XCTAssertFalse(seen.contains { $0.url!.host!.contains("artic") })
     }
 
     func testDownloadRefusesRestrictedWorksUnlessForced() async throws {
-        let canned = Canned()
+        var canned = Canned()
         canned.add("api.artic.edu/api/v1/artworks/2", #"{"data":{"id":2,"is_public_domain":false,"image_id":"r"}}"#)
         canned.add("/iiif/2/r/full/843,", "JPEGBYTES", type: "image/jpeg")
         let museums = MuseumCollections(transport: canned.transport)
@@ -114,7 +119,7 @@ final class ClientTests: XCTestCase {
         do {
             _ = try await museums.download(id, to: folder)
             XCTFail("restricted works are not downloaded by default")
-        } catch let error as MuseumError {
+        } catch {
             XCTAssertEqual(error, .notPublicDomain(id))
         }
         let saved = try await museums.download(id, to: folder, width: 4000, allowRestricted: true)
@@ -122,17 +127,18 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(saved.bytes, 9)
         XCTAssertTrue(saved.source.absoluteString.contains("/full/843,/"), "never past the museum's cap")
         XCTAssertFalse(saved.isPublicDomain)
-        XCTAssertNotNil(canned.seen.last?.value(forHTTPHeaderField: "AIC-User-Agent"))
+        let last = await canned.seen.last
+        XCTAssertNotNil(last?.value(forHTTPHeaderField: "AIC-User-Agent"))
     }
 
     func testDownloadOfAWorkWithoutAnImageSaysSo() async throws {
-        let canned = Canned()
+        var canned = Canned()
         canned.add("/objects/7", metObject(7, publicDomain: false))
         let id = ArtworkID(museum: .met, number: 7)
         do {
             _ = try await MuseumCollections(transport: canned.transport).download(id, to: URL(fileURLWithPath: "/tmp/x.jpg"))
             XCTFail("no image")
-        } catch let error as MuseumError {
+        } catch {
             XCTAssertEqual(error, .noImage(id))
         }
     }
@@ -142,20 +148,20 @@ final class ClientTests: XCTestCase {
         do {
             _ = try await MuseumCollections(transport: Canned().transport).artwork(id)
             XCTFail("unknown")
-        } catch let error as MuseumError {
+        } catch {
             XCTAssertEqual(error, .notFound(id))
         }
     }
 
     func testAPageThatIsNotAnImageIsRefused() async throws {
-        let canned = Canned()
+        var canned = Canned()
         canned.add("/objects/8", metObject(8, publicDomain: true))
         canned.add("images.metmuseum.org", "<html>", type: "text/html")
         do {
             _ = try await MuseumCollections(transport: canned.transport)
                 .download(ArtworkID(museum: .met, number: 8), to: URL(fileURLWithPath: "/tmp/never.jpg"))
             XCTFail("html is not an image")
-        } catch let error as MuseumError {
+        } catch {
             guard case .malformed = error else { return XCTFail("\(error)") }
         }
     }

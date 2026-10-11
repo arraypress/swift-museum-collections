@@ -177,6 +177,37 @@ final class SupportTests: XCTestCase {
         XCTAssertEqual(ImageFiles.file(at: folder, isDirectory: false, id: id, contentType: "image/jpeg"), folder)
     }
 
+    /// How many transforms run at once.
+    actor Gauge {
+        private(set) var now = 0, peak = 0
+        func enter() { now += 1; peak = max(peak, now) }
+        func leave() { now -= 1 }
+    }
+
+    func testConcurrencyCapsWorkInFlightAndStopsOnTheFirstError() async throws {
+        let gauge = Gauge()
+        _ = try await Concurrency.map(Array(0 ..< 40), width: 8) { n in
+            await gauge.enter()
+            try await Task.sleep(nanoseconds: 2_000_000)
+            await gauge.leave()
+            return n
+        }
+        let peak = await gauge.peak
+        XCTAssertLessThanOrEqual(peak, 8)
+        XCTAssertGreaterThan(peak, 1, "it does run in parallel")
+
+        struct Boom: Error {}
+        do {
+            _ = try await Concurrency.map(Array(0 ..< 40), width: 4) { n in
+                if n == 3 { throw Boom() }
+                try await Task.sleep(nanoseconds: 50_000_000)
+                return n
+            }
+            XCTFail("the error must surface")
+        } catch is Boom {}
+        XCTAssertEqual(ErrorMapping.museumError(CancellationError()), .cancelled)
+    }
+
     func testConcurrencyKeepsOrder() async throws {
         let out = try await Concurrency.map(Array(0 ..< 50), width: 8) { n in
             try await Task.sleep(nanoseconds: UInt64((50 - n) * 100_000))

@@ -22,7 +22,7 @@ final class LiveTests: XCTestCase {
             return try await body()
         } catch let error as MuseumError {
             switch error {
-            case .network, .rateLimited, .http: throw XCTSkip("museum refused: \(error.localizedDescription)")
+            case .network, .rateLimited, .http, .cancelled: throw XCTSkip("museum refused: \(error.localizedDescription)")
             default: throw error
             }
         }
@@ -40,6 +40,7 @@ final class LiveTests: XCTestCase {
 
     func testCombinedPublicDomainSearchReturnsBothMuseums() async throws {
         let results = try await live { try await museums.search(ArtworkQuery("sunflowers", publicDomainOnly: true, limit: 6)) }
+        if let failure = results.failures.values.first { throw XCTSkip("a museum refused: \(failure)") }
         XCTAssertEqual(results.artworks.count, 6)
         XCTAssertTrue(results.artworks.allSatisfy(\.isPublicDomain))
         XCTAssertEqual(Set(results.artworks.map(\.id.museum)), [.met, .aic])

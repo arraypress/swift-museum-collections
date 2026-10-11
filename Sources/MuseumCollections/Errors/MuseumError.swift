@@ -41,6 +41,9 @@ public enum MuseumError: Error, LocalizedError, Sendable, Equatable {
     /// The downloaded image could not be written.
     case file(String)
 
+    /// The task was cancelled before the museums answered.
+    case cancelled
+
     /// A sentence describing the failure.
     public var errorDescription: String? {
         switch self {
@@ -55,6 +58,7 @@ public enum MuseumError: Error, LocalizedError, Sendable, Equatable {
         case .malformed(let museum, let what): return "Unexpected response from \(museum.name): \(what)"
         case .network(let why): return "Network error: \(why)"
         case .file(let why): return "Cannot write the image: \(why)"
+        case .cancelled: return "Cancelled"
         }
     }
 }

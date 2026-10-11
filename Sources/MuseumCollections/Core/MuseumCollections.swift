@@ -45,25 +45,25 @@ public struct MuseumCollections: Sendable {
     /// fails is reported in ``SearchResults/failures`` while the other's
     /// results still come back; when every museum fails, the first error is
     /// thrown. A ``ArtworkQuery/metDepartment`` asks the Met alone.
-    public func search(_ query: ArtworkQuery) async throws -> SearchResults {
+    public func search(_ query: ArtworkQuery) async throws(MuseumError) -> SearchResults {
         try QueryRules.validate(query)
         let museums = Museum.allCases.filter {
             query.museums.contains($0) && (query.metDepartment == nil || $0 == .met)
         }
         guard !museums.isEmpty else { throw MuseumError.invalidQuery("No museum to search") }
 
-        async let metOutcome = museums.contains(.met) ? attempt { try await met.page(query) } : nil
-        async let aicOutcome = museums.contains(.aic) ? attempt { try await artInstitute.page(query) } : nil
-        let outcomes: [(Museum, Result<MuseumPage, Error>?)] = [(.met, await metOutcome), (.aic, await aicOutcome)]
+        async let metOutcome = museums.contains(.met) ? attempt(.met, query) : nil
+        async let aicOutcome = museums.contains(.aic) ? attempt(.aic, query) : nil
+        let outcomes: [(Museum, Result<MuseumPage, MuseumError>?)] = [(.met, await metOutcome), (.aic, await aicOutcome)]
 
         var pages: [MuseumPage] = []
         var failures: [Museum: String] = [:]
-        var firstError: Error?
+        var firstError: MuseumError?
         for case let (museum, outcome?) in outcomes {
             switch outcome {
             case .success(let page): pages.append(page)
             case .failure(let error):
-                if error is CancellationError { throw error }
+                if error == .cancelled { throw error }
                 firstError = firstError ?? error
                 failures[museum] = error.localizedDescription
             }
@@ -80,7 +80,7 @@ public struct MuseumCollections: Sendable {
     }
 
     /// One artwork by its id.
-    public func artwork(_ id: ArtworkID) async throws -> Artwork {
+    public func artwork(_ id: ArtworkID) async throws(MuseumError) -> Artwork {
         switch id.museum {
         case .met: return try await met.artwork(id.number)
         case .aic: return try await artInstitute.artwork(id.number)
@@ -95,7 +95,7 @@ public struct MuseumCollections: Sendable {
     /// not reuse. `width` picks a size where the museum offers one (Chicago's
     /// IIIF, at most 843 pixels for restricted works); `nil` is the largest.
     public func download(_ id: ArtworkID, to destination: URL, width: Int? = nil,
-                         allowRestricted: Bool = false) async throws -> DownloadedImage {
+                         allowRestricted: Bool = false) async throws(MuseumError) -> DownloadedImage {
         if let width, width < 1 { throw MuseumError.invalidQuery("The width must be at least 1") }
         var isDirectory: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: destination.path, isDirectory: &isDirectory)
@@ -112,8 +112,8 @@ public struct MuseumCollections: Sendable {
         let data: Data, response: HTTPURLResponse
         do {
             (data, response) = try await http.fetch(source, from: id.museum)
-        } catch MuseumError.http(_, 404) {
-            throw MuseumError.noImage(id)
+        } catch .http(_, 404) {
+            throw .noImage(id)
         }
         let contentType = response.value(forHTTPHeaderField: "Content-Type") ?? ""
         guard contentType.lowercased().hasPrefix("image/") else {
@@ -130,9 +130,12 @@ public struct MuseumCollections: Sendable {
     }
 
     /// A museum's page, its failure kept rather than thrown.
-    func attempt(_ body: () async throws -> MuseumPage) async -> Result<MuseumPage, Error> {
+    func attempt(_ museum: Museum, _ query: ArtworkQuery) async -> Result<MuseumPage, MuseumError> {
         do {
-            return .success(try await body())
+            switch museum {
+            case .met: return .success(try await met.page(query))
+            case .aic: return .success(try await artInstitute.page(query))
+            }
         } catch {
             return .failure(error)
         }

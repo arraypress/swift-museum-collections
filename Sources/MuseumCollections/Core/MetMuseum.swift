@@ -22,21 +22,21 @@ public struct MetMuseum: Sendable {
     }
 
     /// A search of the Met alone.
-    public func search(_ query: ArtworkQuery) async throws -> SearchResults {
+    public func search(_ query: ArtworkQuery) async throws(MuseumError) -> SearchResults {
         let page = try await page(query)
         return SearchResults(artworks: page.hits.map(\.artwork), metMatches: page.total,
                              next: page.hasMore ? [.met: page.scannedTo] : [:], failures: [:])
     }
 
     /// One object by its number.
-    public func artwork(_ number: Int) async throws -> Artwork {
+    public func artwork(_ number: Int) async throws(MuseumError) -> Artwork {
         let id = ArtworkID(museum: .met, number: number)
         let object = try await http.decode(MetObjectResponse.self, from: MuseumURLs.metObject(number), museum: .met, id: id)
         return ArtworkMapping.met(object)
     }
 
     /// The Met's departments, for ``ArtworkQuery/metDepartment``.
-    public func departments() async throws -> [Department] {
+    public func departments() async throws(MuseumError) -> [Department] {
         try await http.decode(MetDepartmentsResponse.self, from: MuseumURLs.metDepartments(), museum: .met)
             .departments.map { Department(id: $0.departmentId, name: $0.displayName) }
     }
@@ -44,7 +44,7 @@ public struct MetMuseum: Sendable {
     /// The ids, then the objects read in batches until the page is full, the
     /// ids run out or ``QueryRules/metReadCap(limit:)`` is reached. Ids the
     /// search lists but the object API does not know (404) are skipped.
-    func page(_ query: ArtworkQuery) async throws -> MuseumPage {
+    func page(_ query: ArtworkQuery) async throws(MuseumError) -> MuseumPage {
         try QueryRules.validate(query)
         let cap = QueryRules.metReadCap(limit: query.limit)
         let url = MuseumURLs.metSearch(text: query.text, imagesOnly: query.imagesOnly, years: query.years,
@@ -56,8 +56,13 @@ public struct MetMuseum: Sendable {
         var scannedTo = query.offset
         reading: while hits.count < query.limit, read < ids.count {
             let batch = Array(ids[read..<read + QueryRules.metBatch(needed: query.limit - hits.count, remaining: ids.count - read)])
-            let objects = try await Concurrency.map(batch, width: QueryRules.metWidth) { number in
-                try await objectIfKnown(number)
+            let objects: [MetObjectResponse?]
+            do {
+                objects = try await Concurrency.map(batch, width: QueryRules.metWidth) { number in
+                    try await objectIfKnown(number)
+                }
+            } catch {
+                throw ErrorMapping.museumError(error)
             }
             for (index, object) in objects.enumerated() {
                 scannedTo = query.offset + read + index + 1
@@ -75,11 +80,11 @@ public struct MetMuseum: Sendable {
     }
 
     /// An object, or nil when the Met does not know its own search's id.
-    func objectIfKnown(_ number: Int) async throws -> MetObjectResponse? {
+    func objectIfKnown(_ number: Int) async throws(MuseumError) -> MetObjectResponse? {
         do {
             return try await http.decode(MetObjectResponse.self, from: MuseumURLs.metObject(number), museum: .met,
                                          id: ArtworkID(museum: .met, number: number))
-        } catch MuseumError.notFound {
+        } catch .notFound {
             return nil
         }
     }

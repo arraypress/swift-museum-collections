@@ -21,14 +21,14 @@ public struct ArtInstitute: Sendable {
     }
 
     /// A search of Chicago alone.
-    public func search(_ query: ArtworkQuery) async throws -> SearchResults {
+    public func search(_ query: ArtworkQuery) async throws(MuseumError) -> SearchResults {
         let page = try await page(query)
         return SearchResults(artworks: page.hits.map(\.artwork), metMatches: nil,
                              next: page.hasMore ? [.aic: page.scannedTo] : [:], failures: [:])
     }
 
     /// One artwork by its number.
-    public func artwork(_ number: Int) async throws -> Artwork {
+    public func artwork(_ number: Int) async throws(MuseumError) -> Artwork {
         let id = ArtworkID(museum: .aic, number: number)
         let envelope = try await http.decode(AICArtworkEnvelope.self, from: MuseumURLs.aicArtwork(number), museum: .aic, id: id)
         return ArtworkMapping.aic(envelope.data)
@@ -36,7 +36,7 @@ public struct ArtInstitute: Sendable {
 
     /// One page, filtered by Chicago, cut at the relevance line
     /// (``Ranking/aicMinimumScore``).
-    func page(_ query: ArtworkQuery) async throws -> MuseumPage {
+    func page(_ query: ArtworkQuery) async throws(MuseumError) -> MuseumPage {
         try QueryRules.validate(query)
         try QueryRules.validateChicago(query)
         let url = MuseumURLs.aicSearch(text: query.text, publicDomainOnly: query.publicDomainOnly,

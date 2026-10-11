@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -12,7 +12,11 @@ let package = Package(
         .library(name: "MuseumCollections", targets: ["MuseumCollections"]),
     ],
     targets: [
-        .target(name: "MuseumCollections"),
+        .target(
+            name: "MuseumCollections",
+            swiftSettings: [.enableUpcomingFeature("NonisolatedNonsendingByDefault")]
+        ),
         .testTarget(name: "MuseumCollectionsTests", dependencies: ["MuseumCollections"]),
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )

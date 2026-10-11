@@ -26,23 +26,19 @@ struct HTTPClient: Sendable {
     }
 
     /// A GET. `id` turns a 404 into ``MuseumError/notFound(_:)``.
-    func fetch(_ url: URL, from museum: Museum, id: ArtworkID? = nil) async throws -> (Data, HTTPURLResponse) {
+    func fetch(_ url: URL, from museum: Museum, id: ArtworkID? = nil) async throws(MuseumError) -> (Data, HTTPURLResponse) {
         let response: (Data, HTTPURLResponse)
         do {
             response = try await transport(RequestHeaders.request(for: url))
-        } catch let error as MuseumError {
-            throw error
-        } catch is CancellationError {
-            throw CancellationError()
         } catch {
-            throw MuseumError.network(error.localizedDescription)
+            throw ErrorMapping.museumError(error)
         }
         if let error = HTTPStatus.error(for: response.1.statusCode, museum: museum, id: id) { throw error }
         return response
     }
 
     /// A GET decoded as JSON.
-    func decode<T: Decodable>(_ type: T.Type, from url: URL, museum: Museum, id: ArtworkID? = nil) async throws -> T {
+    func decode<T: Decodable>(_ type: T.Type, from url: URL, museum: Museum, id: ArtworkID? = nil) async throws(MuseumError) -> T {
         let (data, _) = try await fetch(url, from: museum, id: id)
         do {
             return try JSONDecoder().decode(T.self, from: data)

@@ -23,7 +23,8 @@ let saved = try await museums.download(ArtworkID("aic:27992")!, to: URL(fileURLW
 - ⚖️ **Rights respected** — `download` saves public-domain images only; anything else throws `notPublicDomain` unless the caller passes `allowRestricted`, and Chicago's restricted images are never asked for wider than the 843 pixels it serves
 - 📐 **Sizes** — exact widths through Chicago's IIIF server; the Met's web image (up to 1,000) or its original
 - 📄 **Paging that tells the truth** — `next` gives, per museum, the offset that continues it
-- 🧪 **Tested without a network** — an injectable `Transport`; 28 tests, five of them live (skipped, not failed, when a museum refuses)
+- 🧵 **Modern Swift** — async/await throughout, every model `Sendable`, typed throws (`throws(MuseumError)`) on the public API, the Met's reads in a bounded task group (eight in flight, results in order, the first error or a cancellation stops the rest)
+- 🧪 **Tested without a network** — an injectable `Transport`; 29 tests, five of them live (skipped, not failed, when a museum refuses)
 
 ## What the APIs do that you would not guess (all measured, October 2026)
 
@@ -52,7 +53,7 @@ Live edge cases, all checked: nonsense finds nothing in either museum; unknown i
 
 ## Requirements
 
-macOS 14+ / iOS 16+ / tvOS 16+ / watchOS 9+ / visionOS 1+, Swift 6. Foundation only. No key: both APIs are open (the Met's data is CC0; Chicago's is CC0 apart from descriptions, which this does not fetch).
+macOS 14+ / iOS 16+ / tvOS 16+ / watchOS 9+ / visionOS 1+, Swift 6.2 tools, Swift 6 language mode with `NonisolatedNonsendingByDefault`. Foundation only. No key: both APIs are open (the Met's data is CC0; Chicago's is CC0 apart from descriptions, which this does not fetch).
 
 ## License
 
